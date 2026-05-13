@@ -3,59 +3,24 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-
 class Config:
+    MONGO_URI = os.getenv("MONGO_URI")
+    DB_NAME = os.getenv("DB_NAME")
+    COLLECTION_NAME = os.getenv("COLLECTION_NAME")
 
-    # -----------------------------------------
-    # TARGET SERVER
-    # -----------------------------------------
-    TARGET_BASE_URL = os.getenv("TARGET_BASE_URL"    )
+    API_KEY = os.getenv("API_KEY")
+    TARGET_URL = os.getenv("TARGET_URL")
+    TIMEOUT = int(os.getenv("TIMEOUT", 10))
 
-    # -----------------------------------------
-    # SECURITY
-    # -----------------------------------------
-    API_KEY = os.getenv(
-        "API_KEY",
-        ""
-    )
-
-    # -----------------------------------------
-    # REQUEST TIMEOUT
-    # -----------------------------------------
-    TIMEOUT = int(
-        os.getenv("TIMEOUT", 10)
-    )
-
-    # -----------------------------------------
-    # MONGODB
-    # -----------------------------------------
-    MONGO_URI = os.getenv(
-        "MONGO_URI",
-        "mongodb://localhost:27017"
-    )
-
-    MONGO_DB = os.getenv(
-        "MONGO_DB",
-        "webhook_relay"
-    )
-
-    MONGO_COLLECTION = os.getenv(
-        "MONGO_COLLECTION",
-        "relay_logs"
-    )
-
-    # -----------------------------------------
-    # VALIDATION
-    # -----------------------------------------
     @staticmethod
     def validate():
+        required = [
+            "MONGO_URI",
+            "DB_NAME",
+            "COLLECTION_NAME"
+        ]
 
-        if not Config.TARGET_BASE_URL:
-            raise ValueError(
-                "TARGET_BASE_URL is missing in .env"
-            )
+        missing = [k for k in required if not getattr(Config, k)]
 
-        if not Config.MONGO_URI:
-            raise ValueError(
-                "MONGO_URI is missing in .env"
-            )
+        if missing:
+            raise Exception(f"Missing env variables: {missing}")

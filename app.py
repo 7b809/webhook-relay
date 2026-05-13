@@ -1,8 +1,8 @@
 from flask import Flask, request, jsonify
-import requests
 from pymongo import MongoClient
-from datetime import datetime, timezone
+from datetime import datetime
 import threading
+import requests
 
 from config import Config
 
@@ -10,126 +10,67 @@ app = Flask(__name__)
 
 Config.validate()
 
-# -----------------------------------------
-# MONGODB
-# -----------------------------------------
-mongo_client = MongoClient(
-    Config.MONGO_URI,
-    serverSelectionTimeoutMS=5000
-)
+# MongoDB
+client = MongoClient(Config.MONGO_URI)
 
-db = mongo_client[Config.MONGO_DB]
+db = client[Config.DB_NAME]
 
-relay_collection = db[Config.MONGO_COLLECTION]
+collection = db[Config.COLLECTION_NAME]
 
 
-# -----------------------------------------
-# HOME
-# -----------------------------------------
-@app.route("/", methods=["GET"])
-def home():
-    return jsonify({
-        "status": "running",
-        "service": "webhook-relay"
-    })
-
-
-# -----------------------------------------
-# BACKGROUND RELAY FUNCTION
-# -----------------------------------------
-def process_webhook(webhook_id, data):
-
-    target_url = f"{Config.TARGET_BASE_URL}/webhook/{webhook_id}/"
-
-    headers = {
-        "Content-Type": "application/json",
-        "x-api-key": Config.API_KEY
-    }
-
-    relay_doc = {
-        "webhook_id": webhook_id,
-        "target_url": target_url,
-        "payload": data,
-        "relay_success": False,
-        "target_status": None,
-        "target_response": None,
-        "created_at": datetime.now(timezone.utc)
-    }
+def forward_alert(data):
 
     try:
 
-        # -----------------------------------------
-        # FORWARD TO TARGET
-        # -----------------------------------------
-        response = requests.post(
-            target_url,
-            json=data,
-            headers=headers,
-            timeout=Config.TIMEOUT
+        headers = {"Content-Type": "application/json", "x-api-key": Config.API_KEY}
+
+        requests.post(
+            Config.TARGET_URL, json=data, headers=headers, timeout=Config.TIMEOUT
         )
 
-        relay_doc["relay_success"] = response.ok
-        relay_doc["target_status"] = response.status_code
-        relay_doc["target_response"] = response.text
-
     except Exception as e:
-
-        relay_doc["error"] = str(e)
-
-    # -----------------------------------------
-    # SAVE FINAL RESULT
-    # -----------------------------------------
-    try:
-        relay_collection.insert_one(relay_doc)
-    except Exception as mongo_error:
-        print("Mongo save failed:", mongo_error)
+        print(f"Forward Error: {e}")
 
 
-# -----------------------------------------
-# WEBHOOK ROUTE
-# -----------------------------------------
-@app.route("/webhook/<id>", methods=["POST"])
-@app.route("/webhook/<id>/", methods=["POST"])
-def webhook(id):
+@app.route("/", methods=["GET"])
+def home():
+    return {"status": "running"}
+
+
+@app.route("/webhook/<security_id>", methods=["POST"])
+@app.route("/webhook/<security_id>/", methods=["POST"])
+def webhook(security_id):
 
     try:
 
-        data = request.get_json(silent=True)
+        data = request.get_json()
 
         if not data:
-            return jsonify({
-                "error": "Invalid payload"
-            }), 400
+            return jsonify({"error": "Invalid payload"}), 400
 
-        # -----------------------------------------
-        # START BACKGROUND THREAD
-        # -----------------------------------------
-        threading.Thread(
-            target=process_webhook,
-            args=(id, data),
-            daemon=True
-        ).start()
+        now = datetime.utcnow()
 
-        # -----------------------------------------
-        # IMMEDIATE RESPONSE TO TRADINGVIEW
-        # -----------------------------------------
-        return jsonify({
-            "status": "accepted",
-            "message": "Webhook received"
-        }), 200
+        date_str = now.strftime("%Y-%m-%d")
+
+        log_entry = {"received_at": now, "data": data}
+
+        # Atomic upsert
+        collection.update_one(
+            {"security_id": security_id, "date": date_str},
+            {"$setOnInsert": {"created_at": now}, "$push": {"logs": log_entry}},
+            upsert=True,
+        )
+
+        # Background forwarding
+        threading.Thread(target=forward_alert, args=(data,), daemon=True).start()
+
+        # RETURN FAST
+        return jsonify({"status": "received", "security_id": security_id}), 200
 
     except Exception as e:
 
-        return jsonify({
-            "error": str(e)
-        }), 500
-
-
-# -----------------------------------------
-# IMPORTANT FOR VERCEL
-# -----------------------------------------
-app = app
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, threaded=True)
